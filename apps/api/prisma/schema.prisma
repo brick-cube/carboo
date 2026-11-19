@@ -1,0 +1,930 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ======================================================
+// ENUMS
+// ======================================================
+
+enum UserRole {
+  ADMIN
+  CUSTOMER
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+}
+
+enum SeatType {
+  REGULAR
+  PREMIUM
+  SLEEPER
+  RECLINER
+  DRIVER
+  STAFF
+}
+
+enum LayoutElementType {
+  AISLE
+  DOOR
+  STAIRCASE
+  DRIVER_AREA
+  WHEEL
+  WINDOW
+  TABLE
+  OTHER
+}
+
+enum VehicleStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+}
+
+enum RouteStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum TripTemplateStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum RecurrenceType {
+  DAILY
+  WEEKLY
+  CUSTOM
+}
+
+enum TripStatus {
+  DRAFT
+  SCHEDULED
+  BOARDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum TripSeatSegmentStatus {
+  AVAILABLE
+  LOCKED
+  BOOKED
+}
+
+enum SeatLockStatus {
+  ACTIVE
+  EXPIRED
+  RELEASED
+  CONVERTED
+}
+
+enum BookingStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+  PAYMENT_FAILED
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+
+enum PaymentProvider {
+  STRIPE
+}
+
+enum PaymentStatus {
+  CREATED
+  CHECKOUT_PENDING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  REFUND_PENDING
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+enum CancellationStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+}
+
+// ======================================================
+// USERS & AUTHENTICATION
+// ======================================================
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  name         String
+  email        String     @unique
+  phone        String?
+  passwordHash String?
+  role         UserRole   @default(CUSTOMER)
+  status       UserStatus @default(ACTIVE)
+
+  emailVerifiedAt DateTime? @db.Timestamptz(6)
+  phoneVerifiedAt DateTime? @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  sessions AuthSession[]
+
+  bookings  Booking[]
+  seatLocks SeatLock[]
+
+  createdSeatConfigurations SeatConfiguration[] @relation("SeatConfigurationCreator")
+  createdVehicles           Vehicle[]           @relation("VehicleCreator")
+  createdRoutes             Route[]             @relation("RouteCreator")
+  createdTripTemplates      TripTemplate[]      @relation("TripTemplateCreator")
+  createdTrips              Trip[]              @relation("TripCreator")
+
+  cancellationsProcessed Cancellation[] @relation("CancellationProcessor")
+
+  @@index([role, status])
+  @@index([phone])
+  @@map("users")
+}
+
+model AuthSession {
+  id        String @id @default(uuid()) @db.Uuid
+  userId    String @db.Uuid
+  tokenHash String @unique
+
+  expiresAt DateTime  @db.Timestamptz(6)
+  revokedAt DateTime? @db.Timestamptz(6)
+
+  rotationCompletedAt DateTime? @db.Timestamptz(6)
+
+  userAgent String?
+  ipAddress String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("auth_sessions")
+}
+
+// ======================================================
+// REUSABLE SEAT CONFIGURATIONS
+// ======================================================
+
+model SeatConfiguration {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+
+  // Dimensions of the visual seat-layout editor.
+  canvasWidth  Int @default(600)
+  canvasHeight Int @default(400)
+
+  isActive Boolean @default(true)
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation("SeatConfigurationCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  seats    SeatConfigurationSeat[]
+  elements SeatConfigurationElement[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  vehicles Vehicle[]
+
+  @@index([isActive])
+  @@map("seat_configurations")
+}
+
+model SeatConfigurationSeat {
+  id                  String @id @default(uuid()) @db.Uuid
+  seatConfigurationId String @db.Uuid
+
+  // Display information
+  seatNumber String
+  label      String?
+  seatType   SeatType @default(REGULAR)
+
+  // Position in the visual editor
+  x        Int
+  y        Int
+  width    Int @default(50)
+  height   Int @default(50)
+  rotation Int @default(0)
+
+  rowNumber    Int?
+  columnNumber Int?
+  deckNumber   Int  @default(1)
+
+  isBookable Boolean @default(true)
+  isActive   Boolean @default(true)
+
+  // Optional pricing multiplier for this seat.
+  priceMultiplier Decimal @default(1.0) @db.Decimal(6, 2)
+
+  metadata Json?
+
+  configuration SeatConfiguration @relation(fields: [seatConfigurationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@unique([seatConfigurationId, seatNumber])
+  @@index([seatConfigurationId])
+  @@map("seat_configuration_seats")
+}
+
+model SeatConfigurationElement {
+  id                  String @id @default(uuid()) @db.Uuid
+  seatConfigurationId String @db.Uuid
+
+  type  LayoutElementType
+  label String?
+
+  x        Int
+  y        Int
+  width    Int @default(40)
+  height   Int @default(40)
+  rotation Int @default(0)
+
+  metadata Json?
+
+  configuration SeatConfiguration @relation(fields: [seatConfigurationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([seatConfigurationId])
+  @@map("seat_configuration_elements")
+}
+
+// ======================================================
+// VEHICLES & VEHICLE SEATS
+// ======================================================
+
+model Vehicle {
+  id String @id @default(uuid()) @db.Uuid
+
+  name               String
+  registrationNumber String @unique
+
+  make        String?
+  model       String?
+  vehicleType String?
+  description String?
+
+  status VehicleStatus @default(ACTIVE)
+
+  // Original reusable configuration.
+  // The vehicle seats below are independent snapshots.
+  seatConfigurationId String? @db.Uuid
+
+  seatConfiguration SeatConfiguration? @relation(fields: [seatConfigurationId], references: [id], onDelete: SetNull)
+
+  totalSeats Int @default(0)
+
+  amenities Json?
+  images    Json?
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation("VehicleCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  seats         VehicleSeat[]
+  trips         Trip[]
+  tripTemplates TripTemplate[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([status])
+  @@map("vehicles")
+}
+
+model VehicleSeat {
+  id        String @id @default(uuid()) @db.Uuid
+  vehicleId String @db.Uuid
+
+  // Snapshot of the original configuration seat ID.
+  // This is deliberately not a foreign key.
+  sourceConfigurationSeatId String? @db.Uuid
+
+  seatNumber String
+  label      String?
+  seatType   SeatType @default(REGULAR)
+
+  x        Int
+  y        Int
+  width    Int @default(50)
+  height   Int @default(50)
+  rotation Int @default(0)
+
+  rowNumber    Int?
+  columnNumber Int?
+  deckNumber   Int  @default(1)
+
+  isBookable Boolean @default(true)
+  isActive   Boolean @default(true)
+
+  priceMultiplier Decimal @default(1.0) @db.Decimal(6, 2)
+
+  metadata Json?
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  tripSegments TripSeatSegment[]
+  bookingSeats BookingSeat[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@unique([vehicleId, seatNumber])
+  @@index([vehicleId, isBookable, isActive])
+  @@map("vehicle_seats")
+}
+
+// ======================================================
+// ROUTES & ROUTE STOPS
+// ======================================================
+
+model Route {
+  id String @id @default(uuid()) @db.Uuid
+
+  name        String
+  description String?
+
+  status RouteStatus @default(ACTIVE)
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation("RouteCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  stops         RouteStop[]
+  tripTemplates TripTemplate[]
+  trips         Trip[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([status])
+  @@map("routes")
+}
+
+model RouteStop {
+  id      String @id @default(uuid()) @db.Uuid
+  routeId String @db.Uuid
+
+  stopIndex Int
+
+  name    String
+  address String?
+
+  latitude  Float?
+  longitude Float?
+
+  description String?
+
+  route Route @relation(fields: [routeId], references: [id], onDelete: Cascade)
+
+  templateStops TripTemplateStop[]
+  tripStops     TripStop[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@unique([routeId, stopIndex])
+  @@index([routeId])
+  @@map("route_stops")
+}
+
+// ======================================================
+// RECURRING TRIP TEMPLATES
+// ======================================================
+
+model TripTemplate {
+  id String @id @default(uuid()) @db.Uuid
+
+  name        String
+  description String?
+
+  vehicleId String @db.Uuid
+  routeId   String @db.Uuid
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  route   Route   @relation(fields: [routeId], references: [id], onDelete: Restrict)
+
+  recurrenceType RecurrenceType @default(DAILY)
+
+  // PostgreSQL integer array: 0 = Sunday, 1 = Monday, ... 6 = Saturday.
+  weekdays Int[] @default([])
+
+  startsOn DateTime  @db.Date
+  endsOn   DateTime? @db.Date
+
+  // Local departure time in HH:mm format.
+  departureTime String
+
+  timeZone String @default("Asia/Kolkata")
+
+  // Used to calculate the trip's arrival time.
+  durationMinutes Int
+
+  defaultCurrency String @default("INR") @db.VarChar(3)
+
+  status TripTemplateStatus @default(ACTIVE)
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation("TripTemplateCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  stops TripTemplateStop[]
+  fares TripTemplateFare[]
+  trips Trip[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([vehicleId, status])
+  @@index([routeId])
+  @@index([startsOn, endsOn])
+  @@map("trip_templates")
+}
+
+model TripTemplateStop {
+  id             String @id @default(uuid()) @db.Uuid
+  tripTemplateId String @db.Uuid
+
+  // Optional reference to the original route stop.
+  routeStopId String? @db.Uuid
+
+  stopIndex Int
+
+  // Stop details are copied into the template.
+  name      String
+  address   String?
+  latitude  Float?
+  longitude Float?
+
+  // Minutes relative to the trip's departure time.
+  arrivalOffsetMinutes   Int?
+  departureOffsetMinutes Int?
+
+  template TripTemplate @relation(fields: [tripTemplateId], references: [id], onDelete: Cascade)
+
+  routeStop RouteStop? @relation(fields: [routeStopId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@unique([tripTemplateId, stopIndex])
+  @@index([routeStopId])
+  @@map("trip_template_stops")
+}
+
+model TripTemplateFare {
+  id             String @id @default(uuid()) @db.Uuid
+  tripTemplateId String @db.Uuid
+
+  fromStopIndex Int
+  toStopIndex   Int
+
+  amount   Decimal @db.Decimal(12, 2)
+  currency String  @default("INR") @db.VarChar(3)
+
+  seatType SeatType?
+
+  template TripTemplate @relation(fields: [tripTemplateId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@unique([tripTemplateId, fromStopIndex, toStopIndex, seatType])
+  @@index([tripTemplateId, fromStopIndex, toStopIndex])
+  @@map("trip_template_fares")
+}
+
+// ======================================================
+// INDIVIDUAL TRIPS
+// ======================================================
+
+model Trip {
+  id String @id @default(uuid()) @db.Uuid
+
+  tripCode String @unique
+
+  vehicleId String  @db.Uuid
+  routeId   String? @db.Uuid
+
+  // Null when the admin creates a one-off manual trip.
+  templateId String? @db.Uuid
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  route   Route?  @relation(fields: [routeId], references: [id], onDelete: SetNull)
+
+  template TripTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  startsAt DateTime @db.Timestamptz(6)
+  endsAt   DateTime @db.Timestamptz(6)
+
+  status TripStatus @default(DRAFT)
+
+  currency String @default("INR") @db.VarChar(3)
+
+  notes String?
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation("TripCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  // Snapshot of the route's stops for this particular trip.
+  stops TripStop[]
+
+  fares TripFare[]
+
+  // Authoritative seat inventory, one row per seat per adjacent stop segment.
+  seatSegments TripSeatSegment[]
+
+  bookings  Booking[]
+  seatLocks SeatLock[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([vehicleId, startsAt, endsAt])
+  @@index([status, startsAt])
+  @@index([routeId])
+  @@index([templateId])
+  @@map("trips")
+}
+
+model TripStop {
+  id     String @id @default(uuid()) @db.Uuid
+  tripId String @db.Uuid
+
+  // Optional reference to the original route stop.
+  routeStopId String? @db.Uuid
+
+  stopIndex Int
+
+  // Snapshot of stop details.
+  name      String
+  address   String?
+  latitude  Float?
+  longitude Float?
+
+  scheduledArrivalAt   DateTime? @db.Timestamptz(6)
+  scheduledDepartureAt DateTime? @db.Timestamptz(6)
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  routeStop RouteStop? @relation(fields: [routeStopId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([tripId, stopIndex])
+  @@index([routeStopId])
+  @@map("trip_stops")
+}
+
+// ======================================================
+// TRIP FARES
+// ======================================================
+
+model TripFare {
+  id     String @id @default(uuid()) @db.Uuid
+  tripId String @db.Uuid
+
+  fromStopIndex Int
+  toStopIndex   Int
+
+  amount   Decimal @db.Decimal(12, 2)
+  currency String  @default("INR") @db.VarChar(3)
+
+  // Optional fare variation by seat type.
+  seatType SeatType?
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@unique([tripId, fromStopIndex, toStopIndex, seatType])
+  @@index([tripId, fromStopIndex, toStopIndex])
+  @@map("trip_fares")
+}
+
+// ======================================================
+// SEGMENT-BASED SEAT INVENTORY
+// ======================================================
+
+model TripSeatSegment {
+  id String @id @default(uuid()) @db.Uuid
+
+  tripId        String @db.Uuid
+  vehicleSeatId String @db.Uuid
+
+  // Segment 0 = stop 0 to stop 1.
+  // Segment 1 = stop 1 to stop 2, etc.
+  segmentIndex Int
+
+  status TripSeatSegmentStatus @default(AVAILABLE)
+
+  // Set while a temporary lock is active.
+  lockId String? @db.Uuid
+
+  // Set when the payment has been successfully confirmed.
+  bookingSeatId String? @db.Uuid
+
+  trip        Trip        @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  vehicleSeat VehicleSeat @relation(fields: [vehicleSeatId], references: [id], onDelete: Restrict)
+
+  lock SeatLock? @relation(fields: [lockId], references: [id], onDelete: SetNull)
+
+  bookingSeat BookingSeat? @relation(fields: [bookingSeatId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  // Exactly one inventory row for a seat on a trip segment.
+  @@unique([tripId, vehicleSeatId, segmentIndex])
+  @@index([tripId, segmentIndex, status])
+  @@index([vehicleSeatId])
+  @@index([lockId])
+  @@index([bookingSeatId])
+  @@map("trip_seat_segments")
+}
+
+// ======================================================
+// TEMPORARY SEAT LOCKS
+// ======================================================
+
+model SeatLock {
+  id String @id @default(uuid()) @db.Uuid
+
+  tripId String @db.Uuid
+
+  // A lock can belong to a logged-in customer or a guest.
+  userId String? @db.Uuid
+
+  // One lock per booking attempt.
+  bookingId String @unique @db.Uuid
+
+  status SeatLockStatus @default(ACTIVE)
+
+  expiresAt  DateTime  @db.Timestamptz(6)
+  releasedAt DateTime? @db.Timestamptz(6)
+
+  trip    Trip    @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  segments TripSeatSegment[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([tripId, status, expiresAt])
+  @@index([userId])
+  @@map("seat_locks")
+}
+
+// ======================================================
+// BOOKINGS
+// ======================================================
+
+model Booking {
+  id String @id @default(uuid()) @db.Uuid
+
+  bookingCode String @unique
+
+  tripId String @db.Uuid
+
+  // Nullable to support guest checkout.
+  userId String? @db.Uuid
+
+  fromStopIndex Int
+  toStopIndex   Int
+
+  // Snapshot of the selected journey's stop names.
+  boardingStopName String
+  droppingStopName String
+
+  // Guest/customer contact details.
+  customerName  String
+  customerEmail String
+  customerPhone String?
+
+  status BookingStatus @default(PENDING_PAYMENT)
+
+  currency String @default("INR") @db.VarChar(3)
+
+  subtotal    Decimal @db.Decimal(12, 2)
+  discount    Decimal @default(0) @db.Decimal(12, 2)
+  tax         Decimal @default(0) @db.Decimal(12, 2)
+  totalAmount Decimal @db.Decimal(12, 2)
+
+  // Expiry of the temporary seat reservation.
+  expiresAt DateTime? @db.Timestamptz(6)
+
+  confirmedAt DateTime? @db.Timestamptz(6)
+  cancelledAt DateTime? @db.Timestamptz(6)
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Restrict)
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  seats BookingSeat[]
+
+  seatLock SeatLock?
+
+  payments Payment[]
+
+  cancellation Cancellation?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([tripId, status])
+  @@index([userId, createdAt])
+  @@index([customerEmail])
+  @@index([status, expiresAt])
+  @@map("bookings")
+}
+
+model BookingSeat {
+  id String @id @default(uuid()) @db.Uuid
+
+  bookingId     String @db.Uuid
+  vehicleSeatId String @db.Uuid
+
+  // Seat information snapshot at the time of booking.
+  seatNumber String
+  seatLabel  String?
+  seatType   SeatType
+
+  fromStopIndex Int
+  toStopIndex   Int
+
+  unitPrice Decimal @db.Decimal(12, 2)
+  lineTotal Decimal @db.Decimal(12, 2)
+  currency  String  @default("INR") @db.VarChar(3)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  vehicleSeat VehicleSeat @relation(fields: [vehicleSeatId], references: [id], onDelete: Restrict)
+
+  segments TripSeatSegment[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([bookingId, vehicleSeatId])
+  @@index([vehicleSeatId])
+  @@map("booking_seats")
+}
+
+// ======================================================
+// PAYMENTS & STRIPE
+// ======================================================
+
+model Payment {
+  id String @id @default(uuid()) @db.Uuid
+
+  bookingId String @db.Uuid
+
+  provider PaymentProvider @default(STRIPE)
+  status   PaymentStatus   @default(CREATED)
+
+  amount   Decimal @db.Decimal(12, 2)
+  currency String  @default("INR") @db.VarChar(3)
+
+  // Stripe identifiers.
+  stripeCheckoutSessionId String? @unique
+  stripePaymentIntentId   String? @unique
+
+  checkoutUrl String?
+
+  paidAt DateTime? @db.Timestamptz(6)
+
+  failureCode    String?
+  failureMessage String?
+
+  metadata Json?
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  refunds Refund[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([bookingId, status])
+  @@index([provider, status])
+  @@map("payments")
+}
+
+model PaymentWebhookEvent {
+  id String @id @default(uuid()) @db.Uuid
+
+  provider PaymentProvider @default(STRIPE)
+
+  // Stripe event ID, e.g. evt_...
+  providerEventId String
+
+  eventType String
+
+  status WebhookStatus @default(RECEIVED)
+
+  // Store the event payload for auditing and retry handling.
+  payload Json
+
+  processedAt  DateTime? @db.Timestamptz(6)
+  errorMessage String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@unique([provider, providerEventId])
+  @@index([status, createdAt])
+  @@map("payment_webhook_events")
+}
+
+// ======================================================
+// CANCELLATIONS & REFUNDS
+// ======================================================
+
+model Cancellation {
+  id String @id @default(uuid()) @db.Uuid
+
+  bookingId String @unique @db.Uuid
+
+  status CancellationStatus @default(REQUESTED)
+
+  reason String?
+
+  requestedAt DateTime  @default(now()) @db.Timestamptz(6)
+  processedAt DateTime? @db.Timestamptz(6)
+
+  processedById String? @db.Uuid
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  processedBy User? @relation("CancellationProcessor", fields: [processedById], references: [id], onDelete: SetNull)
+
+  refunds Refund[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([status, requestedAt])
+  @@map("cancellations")
+}
+
+model Refund {
+  id String @id @default(uuid()) @db.Uuid
+
+  paymentId      String  @db.Uuid
+  cancellationId String? @db.Uuid
+
+  amount   Decimal @db.Decimal(12, 2)
+  currency String  @default("INR") @db.VarChar(3)
+
+  status RefundStatus @default(PENDING)
+
+  stripeRefundId String? @unique
+
+  reason String?
+
+  processedAt DateTime? @db.Timestamptz(6)
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  cancellation Cancellation? @relation(fields: [cancellationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([paymentId, status])
+  @@index([cancellationId])
+  @@map("refunds")
+}
